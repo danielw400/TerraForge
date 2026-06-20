@@ -24,7 +24,7 @@ namespace TerraForge.Examples
             var playerStats = new PlayerStats();
             var player = new PlayerController(playerStats, new Vector3(8f, 12f, 8f));
 
-            var gameLoop = new GameLoop(worldAdapter, player);
+            var gameLoop = new GameLoop(worldAdapter, player, im);
             gameLoop.Start();
 
             // subscribe to some actions for logging
@@ -76,13 +76,15 @@ namespace TerraForge.Examples
                 // update input manager
                 im.Update(1f / 60f);
 
-                // update game systems (including ZombieManager)
+                // update game systems (including PlayerController and ZombieManager)
                 gameLoop.Update(1f / 60f);
 
-                // log current Move vector & Run state
+                // log current player and camera positions
                 var move = im.GetAction("Move")!.Vector2Value;
                 var running = im.GetAction("Run")!.Pressed;
                 Console.WriteLine($"Move: ({move.x:0.00}, {move.y:0.00}) Run: {running}");
+                Console.WriteLine($"Player: Pos=({gameLoop.Player.Position.X:0.00},{gameLoop.Player.Position.Y:0.00},{gameLoop.Player.Position.Z:0.00}) State={gameLoop.Player.CurrentState}");
+                Console.WriteLine($"Camera: Pos=({gameLoop.Camera.Position.X:0.00},{gameLoop.Camera.Position.Y:0.00},{gameLoop.Camera.Position.Z:0.00}) Target=({gameLoop.Camera.Target.X:0.00},{gameLoop.Camera.Target.Y:0.00},{gameLoop.Camera.Target.Z:0.00})");
 
                 // show zombie states (if any)
                 var zombies = gameLoop.ZombieManager.Zombies;

@@ -129,5 +129,13 @@ namespace TerraForge.Game
             var v = _chunkManager.GetBlock(Vector3Int.FloorToInt(worldPos));
             return !v.IsEmpty;
         }
+
+        public void UpdateChunksForPosition(Vector3 worldPosition)
+        {
+            var chunkX = (int)MathF.Floor(worldPosition.X / Chunk.ChunkSize);
+            var chunkY = (int)MathF.Floor(worldPosition.Y / Chunk.ChunkSize);
+            var chunkZ = (int)MathF.Floor(worldPosition.Z / Chunk.ChunkSize);
+            _chunkManager.UpdateChunks(new ChunkCoord(chunkX, chunkY, chunkZ));
+        }
     }
 }
