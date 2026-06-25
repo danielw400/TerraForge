@@ -9,30 +9,30 @@ export class NetworkClient {
         this._pollIntervalId = null;
         this._ws = null;
         this._wsUrl = null;
+        this._pollUrl = null;
+        this._pollIntervalMs = 1000;
+        this._reconnectTimeoutId = null;
+        this._manualDisconnect = false;
     }
 
     async fetchFrame(url) {
-        console.log(`[NetworkClient] Fetching frame from: ${url}`);
         try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
                 const err = `HTTP ${res.status} ${res.statusText}`;
-                console.error(`[NetworkClient] Fetch failed: ${err}`);
                 throw new Error(`fetchFrame failed: ${err}`);
             }
 
             const json = await res.json();
-            console.log(`[NetworkClient] Frame loaded successfully from: ${url}`);
             const frame = NetworkClient.parseFrame(json);
             this._emitFrame(frame);
             return frame;
         } catch (err) {
-            console.error(`[NetworkClient] Fetch error: ${err.message}`);
             throw err;
         }
     }
 
-    async connectWebSocket(url) {
+    async connectWebSocket(url, options = {}) {
         if (typeof WebSocket === 'undefined') {
             throw new Error('WebSocket is not available in this environment');
         }
@@ -41,22 +41,37 @@ export class NetworkClient {
             throw new Error('Invalid WebSocket URL');
         }
 
+        this._wsUrl = url;
+        this._manualDisconnect = false;
+        this._pollUrl = options.pollingUrl || this._pollUrl;
+        this._pollIntervalMs = options.retryIntervalMs ?? this._pollIntervalMs;
+
         if (this._ws) {
-            this.disconnectWebSocket();
+            this.disconnectWebSocket({ stopReconnect: true });
         }
 
-        this._wsUrl = url;
         return new Promise((resolve, reject) => {
             const socket = new WebSocket(url);
             this._ws = socket;
+            let didResolve = false;
 
-            socket.addEventListener('open', () => {
-                this._emitStatus(`WebSocket connected: ${url}`);
-                console.log(`[NetworkClient] WebSocket connected to ${url}`);
+            const cleanup = () => {
+                socket.removeEventListener('open', onOpen);
+                socket.removeEventListener('message', onMessage);
+                socket.removeEventListener('close', onClose);
+                socket.removeEventListener('error', onError);
+            };
+
+            const onOpen = () => {
+                cleanup();
+                this._emitStatus('WebSocket connected');
+                this._clearReconnect();
+                this.stopPolling();
+                didResolve = true;
                 resolve();
-            });
+            };
 
-            socket.addEventListener('message', event => {
+            const onMessage = event => {
                 try {
                     const json = JSON.parse(event.data);
                     const frame = NetworkClient.parseFrame(json);
@@ -66,33 +81,50 @@ export class NetworkClient {
                 } catch (error) {
                     console.error('[NetworkClient] WebSocket parse error:', error);
                 }
-            });
+            };
 
-            socket.addEventListener('close', event => {
-                this._emitStatus(`WebSocket closed (${event.code})`);
-                console.warn('[NetworkClient] WebSocket closed:', event.code, event.reason);
-                this._ws = null;
-            });
+            const onClose = event => {
+                cleanup();
+                if (this._ws === socket) {
+                    this._ws = null;
+                }
+                this._emitStatus('WebSocket disconnected');
+                if (!this._manualDisconnect) {
+                    this._scheduleReconnect();
+                    this.startPolling(this._pollUrl || this._wsUrl, this._pollIntervalMs);
+                }
+                if (!didResolve) {
+                    reject(new Error('WebSocket connection closed')); 
+                }
+            };
 
-            socket.addEventListener('error', error => {
+            const onError = error => {
                 this._emitStatus('WebSocket error');
-                console.error('[NetworkClient] WebSocket error', error);
-                if (socket.readyState !== WebSocket.OPEN) {
+                if (!didResolve && socket.readyState !== WebSocket.OPEN) {
+                    cleanup();
                     reject(new Error('WebSocket connection failed'));
                 }
-            });
+            };
+
+            socket.addEventListener('open', onOpen);
+            socket.addEventListener('message', onMessage);
+            socket.addEventListener('close', onClose);
+            socket.addEventListener('error', onError);
         });
     }
 
-    disconnectWebSocket() {
+    disconnectWebSocket({ stopReconnect = false } = {}) {
         if (!this._ws) return;
+        this._manualDisconnect = stopReconnect;
         try {
             this._ws.close(1000, 'Client closing');
         } catch (err) {
             console.warn('[NetworkClient] Failed to close WebSocket cleanly', err);
         }
         this._ws = null;
-        this._emitStatus('WebSocket disconnected');
+        if (stopReconnect) {
+            this._clearReconnect();
+        }
     }
 
     isWebSocketConnected() {
@@ -100,21 +132,51 @@ export class NetworkClient {
     }
 
     startPolling(url, intervalMs = 1000) {
-        if (this._pollIntervalId) this.stopPolling();
-        console.log(`[NetworkClient] Starting polling: ${url} every ${intervalMs}ms`);
-        this._emitStatus(`Polling HTTP backend: ${url}`);
+        if (!url) return;
+        this._pollUrl = url;
+        this._pollIntervalMs = intervalMs;
+
+        if (this.isWebSocketConnected()) {
+            return;
+        }
+
+        if (this._pollIntervalId) {
+            return;
+        }
+
         this._pollIntervalId = setInterval(() => {
-            this.fetchFrame(url).catch(err => {
-                console.warn(`[NetworkClient] Polling fetch error (retrying): ${err.message}`);
+            this.fetchFrame(this._pollUrl).catch(() => {
+                // Silent retry on polling failure
             });
-        }, intervalMs);
+        }, this._pollIntervalMs);
     }
 
     stopPolling() {
         if (!this._pollIntervalId) return;
         clearInterval(this._pollIntervalId);
         this._pollIntervalId = null;
-        this._emitStatus('Stopped HTTP polling');
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectTimeoutId || this._manualDisconnect || !this._wsUrl) {
+            return;
+        }
+
+        this._reconnectTimeoutId = setTimeout(async () => {
+            this._reconnectTimeoutId = null;
+            try {
+                await this.connectWebSocket(this._wsUrl);
+                this._emitStatus('WebSocket reconnected');
+            } catch (err) {
+                this._scheduleReconnect();
+            }
+        }, this._pollIntervalMs);
+    }
+
+    _clearReconnect() {
+        if (!this._reconnectTimeoutId) return;
+        clearTimeout(this._reconnectTimeoutId);
+        this._reconnectTimeoutId = null;
     }
 
     onFrame(callback) {
@@ -138,7 +200,6 @@ export class NetworkClient {
     }
 
     _emitStatus(message) {
-        console.log(`[NetworkClient] ${message}`);
         for (const cb of this._statusListeners) {
             try {
                 cb(message);
@@ -194,6 +255,15 @@ export class NetworkClient {
         return {
             id: dto.id ?? 'player',
             position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null,
             velocity: dto.velocity ? { x: dto.velocity.x, y: dto.velocity.y, z: dto.velocity.z } : null,
             state: dto.state ?? null,
             isGrounded: !!dto.isGrounded,

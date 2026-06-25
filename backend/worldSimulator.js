@@ -13,11 +13,15 @@ export class WorldSimulator {
     generateFrame() {
         this.time += 1;
         
-        // Always generate chunks 0,0,0 and 1,0,0 as loaded
         const chunks = [
             this.generateChunk(0, 0, 0),
-            this.generateChunk(1, 0, 0),
         ];
+        const chunkUnloads = [];
+        if (this.time % 100 < 50) {
+            chunks.push(this.generateChunk(1, 0, 0));
+        } else {
+            chunkUnloads.push({ coord: { x: 1, y: 0, z: 0 } });
+        }
 
         const player = {
             id: 'player',
@@ -63,7 +67,7 @@ export class WorldSimulator {
 
         return {
             chunks,
-            chunkUnloads: [],
+            chunkUnloads,
             player,
             zombies,
             camera,

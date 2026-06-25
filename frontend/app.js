@@ -19,14 +19,14 @@ scene.add(cube);
 const chunkRenderer = new ChunkRenderer(scene, { chunkSize: 16, blockScale: 1 });
 
 // create entity renderer for zombies and player
-const entityRenderer = new EntityRenderer(scene, { debug: true, defaultScale: 1.0 });
+const entityRenderer = new EntityRenderer(scene, { debug: false, defaultScale: 1.0 });
 
 // --- CameraController: third-person follow or explicit camera state ---
 const cameraController = new CameraController(camera, {
     thirdPersonDistance: 8.0,
     thirdPersonHeight: 6.0,
     smoothFactor: 0.15,
-    debug: true
+    debug: false
 });
 
 // --- Network: carregar snapshot inicial com fallback e WebSocket em tempo real ---
@@ -46,27 +46,11 @@ function getBackendUrl() {
     return 'http://localhost:3000/frame';
 }
 
-function createPlayerMesh() {
-    const geo = new THREE.SphereGeometry(0.5, 12, 12);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x2233ff });
-    const m = new THREE.Mesh(geo, mat);
-    m.castShadow = true;
-    m.receiveShadow = true;
-    m.visible = false;
-    scene.add(m);
-    return m;
-}
-
 function applyEntities(frame) {
     if (!frame) return;
 
     currentFrame = frame;
-
-    if (frame.player && frame.player.position) {
-        playerMesh.visible = true;
-        playerMesh.position.set(frame.player.position.x, frame.player.position.y, frame.player.position.z);
-    }
-
+    entityRenderer.updatePlayer(frame.player);
     entityRenderer.updateZombies(frame.zombies);
 }
 
@@ -86,7 +70,6 @@ function applyNetworkFrame(frame) {
 let currentFrame = null;
 let backendCameraInitialized = false;
 let backendAvailable = false;
-let backendConnectedWithWs = false;
 const backendFrameUrl = getBackendUrl();
 const backendWebSocketUrl = NetworkClient.getWebSocketUrl(backendFrameUrl);
 
@@ -95,18 +78,19 @@ net.onFrame(frame => {
 });
 
 net.onStatus(status => {
-    console.log('[App] Network status:', status);
+    if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket disconnected') || status.includes('WebSocket reconnected'))) {
+        console.log('[App] Network status:', status);
+    }
 });
 
 async function initializeBackend() {
     if (backendWebSocketUrl) {
         try {
-            await net.connectWebSocket(backendWebSocketUrl);
+            await net.connectWebSocket(backendWebSocketUrl, { pollingUrl: backendFrameUrl, retryIntervalMs: 1000 });
             backendAvailable = true;
-            backendConnectedWithWs = true;
-            console.log('[App] Connected to backend WebSocket:', backendWebSocketUrl);
+            console.log('[App] Connected to backend WebSocket');
         } catch (err) {
-            console.warn('[App] WebSocket backend unavailable, falling back to HTTP:', err);
+            console.warn('[App] WebSocket backend unavailable, falling back to HTTP.');
         }
     }
 
@@ -114,9 +98,9 @@ async function initializeBackend() {
         try {
             const frame = await net.fetchFrame(backendFrameUrl);
             backendAvailable = true;
-            console.log('[App] Backend HTTP snapshot loaded successfully:', backendFrameUrl);
+            console.log('[App] Backend HTTP snapshot loaded successfully');
             applyNetworkFrame(frame);
-            startBackendPolling();
+            net.startPolling(backendFrameUrl, 250);
             return;
         } catch (err) {
             console.warn('[App] Backend HTTP unavailable:', err);
@@ -144,20 +128,12 @@ async function loadOfflineSnapshot() {
 }
 
 function startBackendPolling() {
-    if (backendConnectedWithWs) {
-        console.log('[App] WebSocket backend active; HTTP polling disabled.');
+    if (net.isWebSocketConnected()) {
         return;
     }
 
     if (backendAvailable) {
-        try {
-            net.startPolling(backendFrameUrl, 250);
-            console.log('[App] Backend polling enabled:', backendFrameUrl);
-        } catch (err) {
-            console.error('[App] Failed to start polling:', err);
-        }
-    } else {
-        console.log('[App] Backend not available - polling disabled (offline mode)');
+        net.startPolling(backendFrameUrl, 250);
     }
 }
 
@@ -172,8 +148,6 @@ function onResize() {
     camera.updateProjectionMatrix();
     renderer.setSize(container.clientWidth, container.clientHeight);
 }
-
-const playerMesh = createPlayerMesh();
 
 function animate(time) {
     const delta = (time - lastTime) * 0.001;

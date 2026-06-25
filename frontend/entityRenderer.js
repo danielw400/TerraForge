@@ -4,10 +4,49 @@ export class EntityRenderer {
     constructor(scene, options = {}) {
         this.scene = scene;
         this.entities = new Map();
+        this.playerEntity = null;
         this.geometryCache = new Map();
         this.materialCache = new Map();
         this.debug = options.debug ?? true;
         this.defaultScale = options.defaultScale || 1.0;
+        this.tmpTarget = new THREE.Vector3();
+        this.tmpDelta = new THREE.Vector3();
+        this.tmpLookAt = new THREE.Vector3();
+    }
+
+    updatePlayer(player) {
+        if (!player || !player.position) {
+            if (this.playerEntity) {
+                this.playerEntity.mesh.visible = false;
+            }
+            return;
+        }
+
+        if (!this.playerEntity) {
+            this._createPlayerEntity(player);
+        }
+
+        const entity = this.playerEntity;
+        const pos = player.position;
+        entity.mesh.visible = true;
+        entity.container.position.set(pos.x, pos.y, pos.z);
+
+        if (player.rotation) {
+            if ('w' in player.rotation && 'x' in player.rotation && 'y' in player.rotation && 'z' in player.rotation) {
+                entity.container.quaternion.set(
+                    player.rotation.x,
+                    player.rotation.y,
+                    player.rotation.z,
+                    player.rotation.w
+                );
+            } else if ('yaw' in player.rotation || 'pitch' in player.rotation || 'roll' in player.rotation) {
+                entity.container.rotation.set(
+                    player.rotation.pitch || 0,
+                    player.rotation.yaw || 0,
+                    player.rotation.roll || 0
+                );
+            }
+        }
     }
 
     updateZombies(zombies = []) {
@@ -50,7 +89,7 @@ export class EntityRenderer {
             container,
             mesh,
             state: zombie.state || 'Unknown',
-            lastPosition: null,
+            lastPosition: new THREE.Vector3(),
         };
         this.entities.set(id, entity);
 
@@ -68,6 +107,28 @@ export class EntityRenderer {
         return mesh;
     }
 
+    _createPlayerEntity(player) {
+        const container = new THREE.Object3D();
+        container.name = 'player';
+
+        const geometry = this._getGeometry('playerSphere', () => new THREE.SphereGeometry(0.5, 16, 16));
+        const material = this._getMaterialForState('player');
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.scale.setScalar(this.defaultScale);
+        mesh.visible = false;
+
+        container.add(mesh);
+        this.scene.add(container);
+
+        this.playerEntity = {
+            container,
+            mesh,
+            state: 'player'
+        };
+    }
+
     _getGeometry(key, factory) {
         if (this.geometryCache.has(key)) {
             return this.geometryCache.get(key);
@@ -78,12 +139,12 @@ export class EntityRenderer {
     }
 
     _getMaterialForState(state) {
-        const key = `zombie-${state || 'Unknown'}`;
+        const key = `${state || 'default'}`;
         if (this.materialCache.has(key)) {
             return this.materialCache.get(key);
         }
 
-        const color = EntityRenderer.getStateColor(state);
+        const color = state === 'player' ? 0x2233ff : EntityRenderer.getStateColor(state);
         const material = new THREE.MeshStandardMaterial({ color });
         this.materialCache.set(key, material);
         return material;
@@ -96,15 +157,14 @@ export class EntityRenderer {
         }
 
         if (zombie.targetPosition) {
-            // face toward the target position if available
-            const target = new THREE.Vector3(zombie.targetPosition.x, zombie.targetPosition.y, zombie.targetPosition.z);
-            entity.container.lookAt(target);
+            this.tmpTarget.set(zombie.targetPosition.x, zombie.targetPosition.y, zombie.targetPosition.z);
+            entity.container.lookAt(this.tmpTarget);
         } else if (entity.lastPosition) {
             const current = entity.container.position;
-            const delta = new THREE.Vector3().subVectors(current, entity.lastPosition);
-            if (delta.lengthSq() > 0.0001) {
-                const lookTarget = current.clone().add(delta);
-                entity.container.lookAt(lookTarget);
+            this.tmpDelta.subVectors(current, entity.lastPosition);
+            if (this.tmpDelta.lengthSq() > 0.0001) {
+                this.tmpLookAt.copy(current).add(this.tmpDelta);
+                entity.container.lookAt(this.tmpLookAt);
             }
         }
 
@@ -114,11 +174,7 @@ export class EntityRenderer {
             if (this.debug) console.log(`[EntityRenderer] Zombie ${entity.id} changed state to ${entity.state}`);
         }
 
-        if (this.debug) {
-            console.log(`[EntityRenderer] Updated zombie ${entity.id}: pos=${position ? `${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}` : 'n/a'}, state=${entity.state}`);
-        }
-
-        entity.lastPosition = entity.container.position.clone();
+        entity.lastPosition.copy(entity.container.position);
     }
 
     _removeZombieEntity(id) {
