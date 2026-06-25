@@ -16,6 +16,7 @@ export class NetworkClient {
     }
 
     async fetchFrame(url) {
+        console.log('[Network] HTTP GET', url);
         try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
@@ -28,11 +29,95 @@ export class NetworkClient {
             this._emitFrame(frame);
             return frame;
         } catch (err) {
+            console.warn('[Network] fetchFrame error', err.message || err);
             throw err;
         }
     }
 
+    async checkHealth(url) {
+        console.log('[Network] Checking backend health', url);
+        try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) {
+                const err = `HTTP ${res.status} ${res.statusText}`;
+                console.warn('[Network] Health check failed', err);
+                return false;
+            }
+            console.log('[Network] Health check OK', url);
+            return true;
+        } catch (err) {
+            console.warn('[Network] Health check error', err.message || err);
+            return false;
+        }
+    }
+
+    static _normalizeBackendBaseUrl(rawUrl) {
+        if (!rawUrl) return null;
+        try {
+            const url = new URL(rawUrl, window.location.href);
+            return url.origin;
+        } catch (e) {
+            console.warn('[Network] Invalid backendUrl value', rawUrl);
+            return null;
+        }
+    }
+
+    static getBackendBaseUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const explicitUrl = params.get('backendUrl')?.trim();
+        if (explicitUrl) {
+            const normalized = NetworkClient._normalizeBackendBaseUrl(explicitUrl);
+            if (normalized) {
+                console.log('[Network] Backend URL detected from query parameter', normalized);
+                try {
+                    localStorage.setItem('terraforge-backend-url', normalized);
+                } catch {}
+                return normalized;
+            }
+        }
+
+        const storedUrl = localStorage.getItem('terraforge-backend-url')?.trim();
+        if (storedUrl) {
+            const normalized = NetworkClient._normalizeBackendBaseUrl(storedUrl);
+            if (normalized) {
+                console.log('[Network] Backend URL detected from localStorage', normalized);
+                return normalized;
+            }
+        }
+
+        const hostname = window.location.hostname;
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
+            const url = `${protocol}//${hostname}:3000`;
+            console.log('[Network] Backend URL detected for localhost', url);
+            return url;
+        }
+
+        if (hostname.endsWith('.app.github.dev') || hostname.endsWith('.github.dev')) {
+            const match = hostname.match(/^(.+)-\d+(\.(?:app\.)?github\.dev)$/);
+            if (match) {
+                const prefix = match[1];
+                const suffix = match[2];
+                const url = `https://${prefix}-3000${suffix}`;
+                console.log('[Network] Backend URL detected for Codespaces', url);
+                return url;
+            }
+        }
+
+        if (window.location.port) {
+            const url = `${protocol}//${hostname}:3000`;
+            console.log('[Network] Backend URL detected from current host port', url);
+            return url;
+        }
+
+        const fallback = `${protocol}//${hostname}`;
+        console.log('[Network] Backend URL fallback to current origin', fallback);
+        return fallback;
+    }
+
     async connectWebSocket(url, options = {}) {
+        console.log('[Network] WebSocket URL detected', url);
         if (typeof WebSocket === 'undefined') {
             throw new Error('WebSocket is not available in this environment');
         }
@@ -157,6 +242,8 @@ export class NetworkClient {
             return;
         }
 
+        console.log('[Network] Fallback to HTTP polling', url, 'interval', intervalMs);
+        this._emitStatus('Fallback to HTTP polling');
         this._pollIntervalId = setInterval(() => {
             this.fetchFrame(this._pollUrl).catch(() => {
                 // Silent retry on polling failure
@@ -175,6 +262,8 @@ export class NetworkClient {
             return;
         }
 
+        console.log('[Network] Reconnecting');
+        this._emitStatus('Reconnecting');
         this._reconnectTimeoutId = setTimeout(async () => {
             this._reconnectTimeoutId = null;
             try {
@@ -226,12 +315,11 @@ export class NetworkClient {
         if (!frameUrl) return null;
 
         try {
-            const url = new URL(frameUrl, window.location.href);
-            url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-            url.pathname = '/ws';
-            url.search = '';
-            url.hash = '';
-            return url.toString();
+            const backendBase = new URL(frameUrl, window.location.href);
+            const wsProtocol = backendBase.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = new URL(`${wsProtocol}//${backendBase.host}/ws`);
+            console.log('[Network] WebSocket URL generated', wsUrl.toString());
+            return wsUrl.toString();
         } catch (error) {
             console.warn('[NetworkClient] Invalid backend frame URL for WebSocket', frameUrl);
             return null;

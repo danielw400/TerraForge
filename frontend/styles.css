@@ -47,3 +47,24 @@ body {
     font-size: 0.95rem;
     line-height: 1.4;
 }
+
+#enter-game-button {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #1f6feb;
+    color: white;
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+
+#enter-game-button:hover {
+    background: #3a82ff;
+}
+
+#input-hint {
+    margin-top: 8px;
+    color: #cbd5e1;
+}

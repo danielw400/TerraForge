@@ -33,22 +33,19 @@ const cameraController = new CameraController(camera, {
 // --- Network: carregar snapshot inicial com fallback e WebSocket em tempo real ---
 const net = new NetworkClient();
 const inputProvider = new BrowserInputProvider(container);
+const enterGameButton = document.getElementById('enter-game-button');
 const inputFlushIntervalMs = 100;
 const pendingInputCommands = [];
 
-function getBackendUrl() {
-    const params = new URLSearchParams(window.location.search);
-    if (params.has('backendUrl')) {
-        return params.get('backendUrl');
-    }
+const backendBaseUrl = NetworkClient.getBackendBaseUrl();
+const backendFrameUrl = `${backendBaseUrl.replace(/\/+$/, '')}/frame`;
+const backendHealthUrl = `${backendBaseUrl.replace(/\/+$/, '')}/health`;
+const backendWebSocketUrl = NetworkClient.getWebSocketUrl(backendFrameUrl);
 
-    const stored = localStorage.getItem('terraforge-backend-url');
-    if (stored) {
-        return stored;
-    }
-
-    return 'http://localhost:3000/frame';
-}
+console.log('[Network] Backend base URL', backendBaseUrl);
+console.log('[Network] Backend frame URL', backendFrameUrl);
+console.log('[Network] Backend health URL', backendHealthUrl);
+console.log('[Network] Backend WebSocket URL', backendWebSocketUrl);
 
 function applyEntities(frame) {
     if (!frame) return;
@@ -74,8 +71,6 @@ function applyNetworkFrame(frame) {
 let currentFrame = null;
 let backendCameraInitialized = false;
 let backendAvailable = false;
-const backendFrameUrl = getBackendUrl();
-const backendWebSocketUrl = NetworkClient.getWebSocketUrl(backendFrameUrl);
 
 net.onFrame(frame => {
     applyNetworkFrame(frame);
@@ -116,30 +111,34 @@ net.onStatus(status => {
 });
 
 async function initializeBackend() {
+    const healthOk = await net.checkHealth(backendHealthUrl);
+    if (!healthOk) {
+        console.warn('[App] Backend health check failed, will try offline snapshot');
+        await loadOfflineSnapshot();
+        return;
+    }
+
     if (backendWebSocketUrl) {
         try {
             await net.connectWebSocket(backendWebSocketUrl, { pollingUrl: backendFrameUrl, retryIntervalMs: 1000 });
             backendAvailable = true;
             console.log('[App] Connected to backend WebSocket');
+            return;
         } catch (err) {
             console.warn('[App] WebSocket backend unavailable, falling back to HTTP.');
         }
     }
 
-    if (!backendAvailable) {
-        try {
-            const frame = await net.fetchFrame(backendFrameUrl);
-            backendAvailable = true;
-            console.log('[App] Backend HTTP snapshot loaded successfully');
-            applyNetworkFrame(frame);
-            net.startPolling(backendFrameUrl, 250);
-            return;
-        } catch (err) {
-            console.warn('[App] Backend HTTP unavailable:', err);
-        }
+    try {
+        const frame = await net.fetchFrame(backendFrameUrl);
+        backendAvailable = true;
+        console.log('[App] Backend HTTP snapshot loaded successfully');
+        applyNetworkFrame(frame);
+        net.startPolling(backendFrameUrl, 250);
+    } catch (err) {
+        console.warn('[App] Backend HTTP unavailable:', err);
+        await loadOfflineSnapshot();
     }
-
-    await loadOfflineSnapshot();
 }
 
 async function loadOfflineSnapshot() {
@@ -172,6 +171,11 @@ function startBackendPolling() {
 initializeBackend();
 inputProvider.start();
 setInterval(flushInputCommands, inputFlushIntervalMs);
+
+enterGameButton?.addEventListener('click', async () => {
+    console.log('[App] Enter Game button clicked');
+    await inputProvider.requestPointerLock();
+});
 
 window.addEventListener('resize', onResize);
 

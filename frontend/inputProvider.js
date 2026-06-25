@@ -4,12 +4,15 @@ export class BrowserInputProvider {
         this.commandBuffer = [];
         this.enabled = false;
         this.pointerLocked = false;
+        this.pointerLockState = 'UNLOCKED';
         this.keyState = new Map();
+        this._lastUnlockTimestamp = 0;
 
         this._onKeyDown = this._onKeyDown.bind(this);
         this._onKeyUp = this._onKeyUp.bind(this);
         this._onMouseMove = this._onMouseMove.bind(this);
         this._onPointerLockChange = this._onPointerLockChange.bind(this);
+        this._onPointerLockError = this._onPointerLockError.bind(this);
         this._onWindowBlur = this._onWindowBlur.bind(this);
         this._onMouseDown = this._onMouseDown.bind(this);
 
@@ -37,6 +40,7 @@ export class BrowserInputProvider {
 
         this.pointerLockElement.addEventListener('mousedown', this._onMouseDown, { passive: true });
         document.addEventListener('pointerlockchange', this._onPointerLockChange, false);
+        document.addEventListener('pointerlockerror', this._onPointerLockError, false);
         document.addEventListener('mousemove', this._onMouseMove, { passive: true });
     }
 
@@ -50,6 +54,7 @@ export class BrowserInputProvider {
 
         this.pointerLockElement.removeEventListener('mousedown', this._onMouseDown, { passive: true });
         document.removeEventListener('pointerlockchange', this._onPointerLockChange, false);
+        document.removeEventListener('pointerlockerror', this._onPointerLockError, false);
         document.removeEventListener('mousemove', this._onMouseMove, { passive: true });
         this._releaseAllKeys();
     }
@@ -99,18 +104,70 @@ export class BrowserInputProvider {
         this._enqueueCommand({ action, value: false, timestamp: Date.now() });
     }
 
-    _onMouseDown() {
-        if (document.pointerLockElement !== this.pointerLockElement && this.pointerLockElement.requestPointerLock) {
-            this.pointerLockElement.requestPointerLock();
+    async requestPointerLock() {
+        if (this.pointerLockState !== 'UNLOCKED') {
+            return false;
+        }
+
+        const now = Date.now();
+        if (now - this._lastUnlockTimestamp < 250) {
+            console.warn('[Input] Pointer Lock request blocked because lock was just released');
+            return false;
+        }
+
+        if (!this.pointerLockElement || !this.pointerLockElement.requestPointerLock) {
+            console.warn('[Input] Pointer Lock unavailable');
+            return false;
+        }
+
+        this.pointerLockState = 'REQUESTING';
+        console.log('[Input] Pointer Lock requested');
+
+        try {
+            await this.pointerLockElement.requestPointerLock();
+            return true;
+        } catch (error) {
+            this.pointerLockState = 'UNLOCKED';
+            console.warn('[Input] Pointer Lock blocked:', error);
+            console.warn('[Input] Pointer Lock denied');
+            return false;
         }
     }
 
+    _onMouseDown() {
+        if (this.pointerLockState !== 'UNLOCKED') {
+            return;
+        }
+
+        this.requestPointerLock();
+    }
+
     _onPointerLockChange() {
-        this.pointerLocked = document.pointerLockElement === this.pointerLockElement;
+        const locked = document.pointerLockElement === this.pointerLockElement;
+        const previousState = this.pointerLockState;
+
+        this.pointerLocked = locked;
+        this.pointerLockState = locked ? 'LOCKED' : 'UNLOCKED';
+
+        if (locked) {
+            console.log('[Input] Pointer Lock acquired');
+        } else if (previousState === 'REQUESTING') {
+            console.warn('[Input] Pointer Lock denied');
+            this._lastUnlockTimestamp = Date.now();
+        } else if (previousState === 'LOCKED') {
+            console.log('[Input] Pointer Lock released');
+            this._lastUnlockTimestamp = Date.now();
+        }
+    }
+
+    _onPointerLockError() {
+        this.pointerLockState = 'UNLOCKED';
+        this.pointerLocked = false;
+        console.warn('[Input] Pointer Lock denied');
     }
 
     _onMouseMove(event) {
-        if (!this.enabled) return;
+        if (!this.enabled || !this.pointerLocked) return;
         const dx = event.movementX || 0;
         const dy = event.movementY || 0;
         if (dx === 0 && dy === 0) return;
