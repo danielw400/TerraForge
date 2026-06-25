@@ -4,6 +4,7 @@ import { NetworkClient } from './network.js';
 import { ChunkRenderer } from './chunkRenderer.js';
 import { CameraController } from './cameraController.js';
 import { EntityRenderer } from './entityRenderer.js';
+import { BrowserInputProvider } from './inputProvider.js';
 
 const container = document.getElementById('canvas-container');
 const scene = createScene();
@@ -31,6 +32,9 @@ const cameraController = new CameraController(camera, {
 
 // --- Network: carregar snapshot inicial com fallback e WebSocket em tempo real ---
 const net = new NetworkClient();
+const inputProvider = new BrowserInputProvider(container);
+const inputFlushIntervalMs = 100;
+const pendingInputCommands = [];
 
 function getBackendUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -77,9 +81,37 @@ net.onFrame(frame => {
     applyNetworkFrame(frame);
 });
 
+function sendPendingInputCommands() {
+    if (!net.isWebSocketConnected() || pendingInputCommands.length === 0) {
+        return;
+    }
+
+    const batch = pendingInputCommands.splice(0, pendingInputCommands.length);
+    const sent = net.sendInputCommands(batch);
+    if (!sent) {
+        pendingInputCommands.unshift(...batch);
+    }
+}
+
+function flushInputCommands() {
+    const commands = inputProvider.drainCommands();
+    if (!Array.isArray(commands) || commands.length === 0) {
+        return;
+    }
+
+    pendingInputCommands.push(...commands);
+    if (net.isWebSocketConnected()) {
+        sendPendingInputCommands();
+    }
+}
+
 net.onStatus(status => {
     if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket disconnected') || status.includes('WebSocket reconnected'))) {
         console.log('[App] Network status:', status);
+    }
+
+    if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket reconnected'))) {
+        sendPendingInputCommands();
     }
 });
 
@@ -138,6 +170,8 @@ function startBackendPolling() {
 }
 
 initializeBackend();
+inputProvider.start();
+setInterval(flushInputCommands, inputFlushIntervalMs);
 
 window.addEventListener('resize', onResize);
 

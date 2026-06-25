@@ -131,6 +131,19 @@ export class NetworkClient {
         return this._ws && this._ws.readyState === WebSocket.OPEN;
     }
 
+    sendInputCommands(commands = []) {
+        if (!this.isWebSocketConnected() || !Array.isArray(commands) || commands.length === 0) {
+            return false;
+        }
+
+        try {
+            this._ws.send(JSON.stringify({ type: 'input', commands }));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
     startPolling(url, intervalMs = 1000) {
         if (!url) return;
         this._pollUrl = url;
