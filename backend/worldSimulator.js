@@ -24,6 +24,7 @@ export class WorldSimulator {
         this.jumpSpeed = 8.0;
         this.moveSpeed = 3.5;
         this.runMultiplier = 1.8;
+        this.environmentObjects = this._generateEnvironmentObjects();
     }
 
     applyInputCommands(commands) {
@@ -138,20 +139,24 @@ export class WorldSimulator {
 
         // Generate 2-3 zombies orbiting the player
         const zombies = [];
-        const zCount = 2;
+        const zCount = 20;
         for (let i = 0; i < zCount; i++) {
-            const angle = (i / zCount) * Math.PI * 2 + this.time * 0.02;
-            const dist = 18.0;
+            const angle = (i / zCount) * Math.PI * 2 + this.time * 0.05;
+            const radius = 12.0 + (i % 5) * 1.5;
+            const offsetX = Math.cos(angle) * radius;
+            const offsetZ = Math.sin(angle) * radius;
+            const position = {
+                x: player.position.x + offsetX,
+                y: 1.0,
+                z: player.position.z + offsetZ,
+            };
+            const state = i % 3 === 0 ? 'Chasing' : i % 3 === 1 ? 'Alert' : 'Wandering';
             zombies.push({
                 id: `z-${i}`,
                 type: 'InfectadoComum',
-                position: {
-                    x: player.position.x + Math.cos(angle) * dist,
-                    y: 1.0,
-                    z: player.position.z + Math.sin(angle) * dist,
-                },
-                state: i % 2 === 0 ? 'Wandering' : 'Alert',
-                health: 50.0 + i * 25,
+                position,
+                state,
+                health: 40.0 + (i % 4) * 15,
                 targetPosition: player.position,
             });
         }
@@ -166,18 +171,54 @@ export class WorldSimulator {
         };
 
         return {
+            serverTime: new Date().toISOString(),
             chunks,
             chunkUnloads,
             player,
             zombies,
+            environmentObjects: this.environmentObjects,
             camera,
         };
     }
 
     generateInitialSnapshot() {
-        // Similar to generateFrame but always same state
         this.time = 0;
         return this.generateFrame();
+    }
+
+    _generateEnvironmentObjects() {
+        const objects = [];
+        const definitions = [
+            { type: 'Tree', baseRadius: 8, count: 4 },
+            { type: 'Rock', baseRadius: 12, count: 3 },
+            { type: 'Bush', baseRadius: 6, count: 5 },
+        ];
+
+        let idIndex = 0;
+        for (const def of definitions) {
+            for (let i = 0; i < def.count; i++) {
+                const angle = (i / def.count) * Math.PI * 2 + (def.baseRadius / 10);
+                const radius = def.baseRadius + (i % 2 === 0 ? 1.5 : -1.0);
+                objects.push({
+                    id: `${def.type.toLowerCase()}-${idIndex}`,
+                    type: def.type,
+                    position: {
+                        x: this.playerPosition.x + Math.cos(angle) * radius,
+                        y: 0.0,
+                        z: this.playerPosition.z + Math.sin(angle) * radius,
+                    },
+                    rotation: {
+                        yaw: (i * 0.45) % (Math.PI * 2),
+                        pitch: 0,
+                        roll: 0,
+                    },
+                    state: 'Static',
+                });
+                idIndex += 1;
+            }
+        }
+
+        return objects;
     }
 
     generateChunk(cx, cy, cz) {

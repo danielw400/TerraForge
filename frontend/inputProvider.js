@@ -121,7 +121,7 @@ export class BrowserInputProvider {
         }
 
         this.pointerLockState = 'REQUESTING';
-        console.log('[Input] Pointer Lock requested');
+        console.log('[Input] Pointer Lock Requested');
 
         try {
             await this.pointerLockElement.requestPointerLock();
@@ -129,7 +129,7 @@ export class BrowserInputProvider {
         } catch (error) {
             this.pointerLockState = 'UNLOCKED';
             console.warn('[Input] Pointer Lock blocked:', error);
-            console.warn('[Input] Pointer Lock denied');
+            console.warn('[Input] Pointer Lock Denied');
             return false;
         }
     }
@@ -150,12 +150,12 @@ export class BrowserInputProvider {
         this.pointerLockState = locked ? 'LOCKED' : 'UNLOCKED';
 
         if (locked) {
-            console.log('[Input] Pointer Lock acquired');
+            console.log('[Input] Pointer Lock Acquired');
         } else if (previousState === 'REQUESTING') {
-            console.warn('[Input] Pointer Lock denied');
+            console.warn('[Input] Pointer Lock Denied');
             this._lastUnlockTimestamp = Date.now();
         } else if (previousState === 'LOCKED') {
-            console.log('[Input] Pointer Lock released');
+            console.log('[Input] Pointer Lock Released');
             this._lastUnlockTimestamp = Date.now();
         }
     }
@@ -163,7 +163,8 @@ export class BrowserInputProvider {
     _onPointerLockError() {
         this.pointerLockState = 'UNLOCKED';
         this.pointerLocked = false;
-        console.warn('[Input] Pointer Lock denied');
+        this._lastUnlockTimestamp = Date.now();
+        console.warn('[Input] Pointer Lock Denied');
     }
 
     _onMouseMove(event) {

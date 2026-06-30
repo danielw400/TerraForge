@@ -11,8 +11,28 @@
         <div id="canvas-container"></div>
         <aside id="overlay">
             <h1>TerraForge</h1>
-            <p>Three.js preview scene</p>
-            <p>Render loop active, backend integration pending.</p>
+            <div class="status-group">
+                <div class="status-row">
+                    <span>Backend:</span>
+                    <span id="status-backend" class="status-value status-disconnected">Disconnected</span>
+                </div>
+                <div class="status-row">
+                    <span>WebSocket:</span>
+                    <span id="status-websocket" class="status-value status-disconnected">Disconnected</span>
+                </div>
+                <div class="status-row">
+                    <span>Synchronization:</span>
+                    <span id="status-sync" class="status-value status-disconnected">Stopped</span>
+                </div>
+            </div>
+            <div class="stats-group">
+                <div class="stats-row"><span>Chunks loaded:</span> <span id="stat-chunks">0</span></div>
+                <div class="stats-row"><span>Total entities:</span> <span id="stat-entities">0</span></div>
+                <div class="stats-row"><span>Total zombies:</span> <span id="stat-zombies">0</span></div>
+                <div class="stats-row"><span>Player pos:</span> <span id="stat-player-pos">0, 0, 0</span></div>
+                <div class="stats-row"><span>FPS:</span> <span id="stat-fps">0</span></div>
+                <div class="stats-row"><span>Latency:</span> <span id="stat-latency">-</span></div>
+            </div>
             <button id="enter-game-button">Entrar no jogo</button>
             <p id="input-hint">Clique ou pressione o botão para habilitar o mouse.</p>
         </aside>

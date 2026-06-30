@@ -7,6 +7,15 @@ import { EntityRenderer } from './entityRenderer.js';
 import { BrowserInputProvider } from './inputProvider.js';
 
 const container = document.getElementById('canvas-container');
+const statusBackend = document.getElementById('status-backend');
+const statusWebSocket = document.getElementById('status-websocket');
+const statusSync = document.getElementById('status-sync');
+const statChunks = document.getElementById('stat-chunks');
+const statEntities = document.getElementById('stat-entities');
+const statZombies = document.getElementById('stat-zombies');
+const statPlayerPos = document.getElementById('stat-player-pos');
+const statFps = document.getElementById('stat-fps');
+const statLatency = document.getElementById('stat-latency');
 const scene = createScene();
 const camera = createCamera(container);
 const renderer = createRenderer(container);
@@ -42,6 +51,10 @@ const backendFrameUrl = `${backendBaseUrl.replace(/\/+$/, '')}/frame`;
 const backendHealthUrl = `${backendBaseUrl.replace(/\/+$/, '')}/health`;
 const backendWebSocketUrl = NetworkClient.getWebSocketUrl(backendFrameUrl);
 
+let lastFrameTime = 0;
+let fps = 0;
+let lastLatency = null;
+
 console.log('[Network] Backend base URL', backendBaseUrl);
 console.log('[Network] Backend frame URL', backendFrameUrl);
 console.log('[Network] Backend health URL', backendHealthUrl);
@@ -53,6 +66,7 @@ function applyEntities(frame) {
     currentFrame = frame;
     entityRenderer.updatePlayer(frame.player);
     entityRenderer.updateZombies(frame.zombies);
+    entityRenderer.updateEnvironmentObjects(frame.environmentObjects);
 }
 
 function applyNetworkFrame(frame) {
@@ -66,6 +80,7 @@ function applyNetworkFrame(frame) {
         }
         backendCameraInitialized = true;
     }
+    updateWorldStats(frame);
 }
 
 let currentFrame = null;
@@ -73,9 +88,11 @@ let backendCameraInitialized = false;
 let backendAvailable = false;
 
 net.onFrame(frame => {
+    if (frame && frame.serverTime) {
+        lastLatency = Date.now() - new Date(frame.serverTime).getTime();
+    }
     applyNetworkFrame(frame);
 });
-
 function sendPendingInputCommands() {
     if (!net.isWebSocketConnected() || pendingInputCommands.length === 0) {
         return;
@@ -101,8 +118,15 @@ function flushInputCommands() {
 }
 
 net.onStatus(status => {
-    if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket disconnected') || status.includes('WebSocket reconnected'))) {
+    if (typeof status === 'string') {
         console.log('[App] Network status:', status);
+        if (status.includes('WebSocket connected')) {
+            setConnectionStatus('Connected', 'Active', 'Running');
+        } else if (status.includes('WebSocket reconnected')) {
+            setConnectionStatus('Connected', 'Reconnecting', 'Running');
+        } else if (status.includes('WebSocket disconnected')) {
+            setConnectionStatus('Connected', 'Disconnected', 'Running');
+        }
     }
 
     if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket reconnected'))) {
@@ -114,6 +138,7 @@ async function initializeBackend() {
     const healthOk = await net.checkHealth(backendHealthUrl);
     if (!healthOk) {
         console.warn('[App] Backend health check failed, will try offline snapshot');
+        setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
         await loadOfflineSnapshot();
         return;
     }
@@ -123,9 +148,11 @@ async function initializeBackend() {
             await net.connectWebSocket(backendWebSocketUrl, { pollingUrl: backendFrameUrl, retryIntervalMs: 1000 });
             backendAvailable = true;
             console.log('[App] Connected to backend WebSocket');
+            setConnectionStatus('Connected', 'Active', 'Running');
             return;
         } catch (err) {
             console.warn('[App] WebSocket backend unavailable, falling back to HTTP.');
+            setConnectionStatus('Connected', 'Disconnected', 'Running');
         }
     }
 
@@ -133,11 +160,47 @@ async function initializeBackend() {
         const frame = await net.fetchFrame(backendFrameUrl);
         backendAvailable = true;
         console.log('[App] Backend HTTP snapshot loaded successfully');
+        setConnectionStatus('Connected', 'Disconnected', 'Running');
         applyNetworkFrame(frame);
         net.startPolling(backendFrameUrl, 250);
     } catch (err) {
         console.warn('[App] Backend HTTP unavailable:', err);
+        setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
         await loadOfflineSnapshot();
+    }
+}
+
+function setStatus(element, text, cssClass) {
+    if (!element) return;
+    element.textContent = text;
+    element.className = `status-value ${cssClass}`;
+}
+
+function setConnectionStatus(backend, websocket, sync) {
+    setStatus(statusBackend, backend, backend === 'Connected' ? 'status-connected' : 'status-disconnected');
+    setStatus(statusWebSocket, websocket, websocket === 'Active' ? 'status-connected' : websocket === 'Reconnecting' ? 'status-reconnecting' : 'status-disconnected');
+    setStatus(statusSync, sync, sync === 'Running' ? 'status-connected' : sync === 'Stopped' ? 'status-disconnected' : 'status-reconnecting');
+}
+
+setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
+
+function updateWorldStats(frame) {
+    if (!frame) return;
+    statChunks.textContent = `${chunkRenderer.chunks.size}`;
+    const zombiesCount = Array.isArray(frame.zombies) ? frame.zombies.length : 0;
+    const environmentCount = Array.isArray(frame.environmentObjects) ? frame.environmentObjects.length : 0;
+    const totalEntities = 1 + zombiesCount + environmentCount;
+    statEntities.textContent = `${totalEntities}`;
+    statZombies.textContent = `${zombiesCount}`;
+    if (frame.player && frame.player.position) {
+        const pos = frame.player.position;
+        statPlayerPos.textContent = `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`;
+    }
+    if (typeof fps === 'number') {
+        statFps.textContent = `${Math.round(fps)}`;
+    }
+    if (lastLatency !== null) {
+        statLatency.textContent = `${Math.round(lastLatency)} ms`;
     }
 }
 
@@ -188,7 +251,11 @@ function onResize() {
 }
 
 function animate(time) {
-    const delta = (time - lastTime) * 0.001;
+    const deltaMs = time - lastTime;
+    const delta = deltaMs * 0.001;
+    if (deltaMs > 0) {
+        fps = 1000 / deltaMs;
+    }
     lastTime = time;
 
     cube.rotation.y += delta * 0.45;
@@ -200,6 +267,7 @@ function animate(time) {
         cameraController.update(playerPos, cameraState);
     }
 
+    updateWorldStats(currentFrame);
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
 }

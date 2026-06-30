@@ -7,6 +7,7 @@ export class EntityRenderer {
         this.playerEntity = null;
         this.geometryCache = new Map();
         this.materialCache = new Map();
+        this.environmentEntities = new Map();
         this.debug = options.debug ?? true;
         this.defaultScale = options.defaultScale || 1.0;
         this.tmpTarget = new THREE.Vector3();
@@ -75,6 +76,30 @@ export class EntityRenderer {
         }
     }
 
+    updateEnvironmentObjects(objects = []) {
+        const seenIds = new Set();
+        if (!Array.isArray(objects)) objects = [];
+
+        for (const object of objects) {
+            if (!object || !object.id) continue;
+            const id = object.id;
+            seenIds.add(id);
+
+            if (!this.environmentEntities.has(id)) {
+                this._createEnvironmentObject(id, object);
+            }
+
+            const entity = this.environmentEntities.get(id);
+            this._updateEnvironmentObject(entity, object);
+        }
+
+        for (const existingId of Array.from(this.environmentEntities.keys())) {
+            if (!seenIds.has(existingId)) {
+                this._removeEnvironmentObject(existingId);
+            }
+        }
+    }
+
     _createZombieEntity(id, zombie) {
         const container = new THREE.Object3D();
         container.name = `zombie-${id}`;
@@ -105,6 +130,79 @@ export class EntityRenderer {
         mesh.receiveShadow = true;
         mesh.scale.setScalar(this.defaultScale);
         return mesh;
+    }
+
+    _createEnvironmentObject(id, object) {
+        const container = new THREE.Object3D();
+        container.name = `environment-${id}`;
+
+        const mesh = this._createEnvironmentMesh(object);
+        container.add(mesh);
+        this.scene.add(container);
+
+        const entity = {
+            id,
+            container,
+            mesh,
+            type: object.type,
+            state: object.state || 'Static'
+        };
+        this.environmentEntities.set(id, entity);
+        return entity;
+    }
+
+    _createEnvironmentMesh(object) {
+        const type = (object.type || '').toLowerCase();
+        let geometry;
+        let materialColor;
+
+        switch (type) {
+            case 'tree':
+                geometry = new THREE.ConeGeometry(0.8, 2.0, 8);
+                materialColor = 0x2f8132;
+                break;
+            case 'rock':
+                geometry = new THREE.DodecahedronGeometry(0.9);
+                materialColor = 0x6b7280;
+                break;
+            case 'bush':
+                geometry = new THREE.SphereGeometry(0.7, 8, 8);
+                materialColor = 0x4f7a3d;
+                break;
+            default:
+                geometry = new THREE.BoxGeometry(1, 1, 1);
+                materialColor = 0x999999;
+                break;
+        }
+
+        const material = new THREE.MeshStandardMaterial({ color: materialColor });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.scale.setScalar(this.defaultScale);
+        return mesh;
+    }
+
+    _updateEnvironmentObject(entity, object) {
+        const position = object.position;
+        if (position) {
+            entity.container.position.set(position.x, position.y, position.z);
+        }
+
+        if (object.rotation) {
+            if ('x' in object.rotation && 'y' in object.rotation && 'z' in object.rotation && 'w' in object.rotation) {
+                entity.container.quaternion.set(object.rotation.x, object.rotation.y, object.rotation.z, object.rotation.w);
+            } else if ('yaw' in object.rotation || 'pitch' in object.rotation || 'roll' in object.rotation) {
+                entity.container.rotation.set(object.rotation.pitch || 0, object.rotation.yaw || 0, object.rotation.roll || 0);
+            }
+        }
+    }
+
+    _removeEnvironmentObject(id) {
+        const entity = this.environmentEntities.get(id);
+        if (!entity) return;
+        this.scene.remove(entity.container);
+        this.environmentEntities.delete(id);
     }
 
     _createPlayerEntity(player) {
@@ -197,6 +295,7 @@ export class EntityRenderer {
             case 'wandering': return 0xff3333;
             case 'alert': return 0xffa500;
             case 'chasing': return 0xff0000;
+            case 'player': return 0x2233ff;
             default: return 0xcc0000;
         }
     }

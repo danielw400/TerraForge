@@ -48,9 +48,39 @@ body {
     line-height: 1.4;
 }
 
+.status-group,
+.stats-group {
+    margin-top: 12px;
+}
+
+.status-row,
+.stats-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    font-size: 0.92rem;
+}
+
+.status-value {
+    font-weight: 700;
+}
+
+.status-connected {
+    color: #4ade80;
+}
+
+.status-disconnected {
+    color: #f87171;
+}
+
+.status-reconnecting {
+    color: #fbbf24;
+}
+
 #enter-game-button {
     display: inline-block;
-    margin-top: 10px;
+    margin-top: 12px;
     padding: 10px 16px;
     border: none;
     border-radius: 8px;

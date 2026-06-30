@@ -333,12 +333,13 @@ export class NetworkClient {
         if (!frameSource || typeof frameSource !== 'object') return null;
 
         return {
+            serverTime: frameSource.serverTime ?? frameSource.server_time ?? null,
             chunks: Array.isArray(frameSource.chunks) ? frameSource.chunks.map(NetworkClient.parseChunk) : [],
             chunkUnloads: Array.isArray(frameSource.chunkUnloads) ? frameSource.chunkUnloads.map(c => ({ coord: c.coord })) : [],
             player: frameSource.player ? NetworkClient.parsePlayer(frameSource.player) : null,
             zombies: Array.isArray(frameSource.zombies) ? frameSource.zombies.map(NetworkClient.parseZombie) : [],
+            environmentObjects: Array.isArray(frameSource.environmentObjects) ? frameSource.environmentObjects.map(NetworkClient.parseEnvironmentObject) : [],
             camera: frameSource.camera ? NetworkClient.parseCamera(frameSource.camera) : null,
-            raw: frameSource
         };
     }
 
@@ -378,8 +379,35 @@ export class NetworkClient {
             type: dto.type,
             position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
             state: dto.state,
-            health: dto.health,
-            targetPosition: dto.targetPosition ? { x: dto.targetPosition.x, y: dto.targetPosition.y, z: dto.targetPosition.z } : null
+            health: typeof dto.health === 'number' ? dto.health : null,
+            targetPosition: dto.targetPosition ? { x: dto.targetPosition.x, y: dto.targetPosition.y, z: dto.targetPosition.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null
+        };
+    }
+
+    static parseEnvironmentObject(dto) {
+        return {
+            id: dto.id,
+            type: dto.type,
+            position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null,
+            state: dto.state ?? 'Static'
         };
     }
 
