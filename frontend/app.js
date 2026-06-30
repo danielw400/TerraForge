@@ -138,6 +138,7 @@ async function initializeBackend() {
     const healthOk = await net.checkHealth(backendHealthUrl);
     if (!healthOk) {
         console.warn('[App] Backend health check failed, will try offline snapshot');
+        console.log('[Network] Offline mode enabled.');
         setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
         await loadOfflineSnapshot();
         return;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -32,6 +33,7 @@ namespace TerraForge.Engine.RenderingBridge
         {
             if (_listener.IsListening) return;
 
+            Console.WriteLine("[Network] Connecting...");
             _listener.Start();
             _acceptLoopTask = Task.Run(() => AcceptLoopAsync(_cancellationTokenSource.Token));
             _broadcastLoopTask = Task.Run(() => BroadcastLoopAsync(_cancellationTokenSource.Token));
@@ -46,7 +48,7 @@ namespace TerraForge.Engine.RenderingBridge
 
             lock (_clientsLock)
             {
-                foreach (var client in _clients)
+                foreach (var client in _clients.ToList())
                 {
                     try
                     {
@@ -109,9 +111,15 @@ namespace TerraForge.Engine.RenderingBridge
 
                 if (request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (path.Equals("/frame", StringComparison.OrdinalIgnoreCase) || path.Equals("/frame/initial", StringComparison.OrdinalIgnoreCase))
+                    if (path.Equals("/frame", StringComparison.OrdinalIgnoreCase))
                     {
                         await WriteJsonResponseAsync(response, _renderingBridge.CollectFrameStateJson()).ConfigureAwait(false);
+                        return;
+                    }
+
+                    if (path.Equals("/frame/initial", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await WriteJsonResponseAsync(response, _renderingBridge.CollectInitialSnapshotJson()).ConfigureAwait(false);
                         return;
                     }
                 }
@@ -152,16 +160,25 @@ namespace TerraForge.Engine.RenderingBridge
             }
 
             var socket = socketContext.WebSocket;
+
             lock (_clientsLock)
             {
+                foreach (var existing in _clients.ToList())
+                {
+                    if (existing.State == WebSocketState.Open)
+                    {
+                        existing.Abort();
+                    }
+                }
+
                 _clients.Add(socket);
             }
 
-            Console.WriteLine($"[WebSocketBridge] New client connected: {context.Request.RemoteEndPoint}");
+            Console.WriteLine("[Network] Connected.");
 
             try
             {
-                await SendFrameAsync(socket, cancellationToken).ConfigureAwait(false);
+                await SendInitialSnapshotAsync(socket, cancellationToken).ConfigureAwait(false);
                 await ReceiveLoopAsync(socket, cancellationToken).ConfigureAwait(false);
             }
             finally
@@ -171,7 +188,7 @@ namespace TerraForge.Engine.RenderingBridge
                     _clients.Remove(socket);
                 }
 
-                Console.WriteLine($"[WebSocketBridge] Client disconnected: {context.Request.RemoteEndPoint}");
+                Console.WriteLine("[Network] Connection lost.");
                 socket.Dispose();
             }
         }
@@ -207,7 +224,7 @@ namespace TerraForge.Engine.RenderingBridge
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[WebSocketBridge] receive error: {ex}");
+                    Console.WriteLine($"[Network] Receive error: {ex}");
                     break;
                 }
             }
@@ -228,12 +245,12 @@ namespace TerraForge.Engine.RenderingBridge
                     if (document.RootElement.TryGetProperty("action", out var actionProperty) &&
                         actionProperty.ValueKind == JsonValueKind.String)
                     {
-                        Console.WriteLine($"[WebSocketBridge] Received input command: {actionProperty.GetString()}");
+                        Console.WriteLine($"[Network] Received input command: {actionProperty.GetString()}");
                     }
                     else if (document.RootElement.TryGetProperty("type", out var typeProperty) &&
                              typeProperty.ValueKind == JsonValueKind.String)
                     {
-                        Console.WriteLine($"[WebSocketBridge] Received message type: {typeProperty.GetString()}");
+                        Console.WriteLine($"[Network] Received message type: {typeProperty.GetString()}");
                     }
                 }
             }
@@ -256,44 +273,63 @@ namespace TerraForge.Engine.RenderingBridge
                     break;
                 }
 
-                string json;
                 try
                 {
-                    json = _renderingBridge.CollectFrameStateJson();
+                    List<WebSocket> clientsCopy;
+                    lock (_clientsLock)
+                    {
+                        clientsCopy = new List<WebSocket>(_clients);
+                    }
+
+                    foreach (var client in clientsCopy)
+                    {
+                        if (client.State != WebSocketState.Open)
+                        {
+                            lock (_clientsLock)
+                            {
+                                _clients.Remove(client);
+                            }
+
+                            Console.WriteLine("[Network] Connection lost.");
+                            continue;
+                        }
+
+                        await SendFrameAsync(client, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[WebSocketBridge] frame collection failed: {ex}");
-                    continue;
-                }
-
-                List<WebSocket> clientsCopy;
-                lock (_clientsLock)
-                {
-                    clientsCopy = new List<WebSocket>(_clients);
-                }
-
-                foreach (var client in clientsCopy)
-                {
-                    if (client.State != WebSocketState.Open)
-                    {
-                        lock (_clientsLock)
-                        {
-                            _clients.Remove(client);
-                        }
-                        continue;
-                    }
-
-                    await SendFrameAsync(client, cancellationToken).ConfigureAwait(false);
+                    Console.WriteLine($"[Network] Frame update failed: {ex}");
                 }
             }
         }
 
+        private async Task SendInitialSnapshotAsync(WebSocket webSocket, CancellationToken cancellationToken)
+        {
+            if (webSocket.State != WebSocketState.Open)
+            {
+                return;
+            }
+
+            var json = _renderingBridge.CollectInitialSnapshotJson();
+            await SendPayloadAsync(webSocket, json, cancellationToken).ConfigureAwait(false);
+            Console.WriteLine("[Network] InitialSnapshot sent.");
+        }
+
         private async Task SendFrameAsync(WebSocket webSocket, CancellationToken cancellationToken)
         {
-            if (webSocket.State != WebSocketState.Open) return;
+            if (webSocket.State != WebSocketState.Open)
+            {
+                return;
+            }
 
             var json = _renderingBridge.CollectFrameStateJson();
+            await SendPayloadAsync(webSocket, json, cancellationToken).ConfigureAwait(false);
+            Console.WriteLine("[Network] FrameUpdate sent.");
+        }
+
+        private static async Task SendPayloadAsync(WebSocket webSocket, string json, CancellationToken cancellationToken)
+        {
             var bytes = Encoding.UTF8.GetBytes(json);
             var buffer = new ArraySegment<byte>(bytes);
 
@@ -303,15 +339,11 @@ namespace TerraForge.Engine.RenderingBridge
             }
             catch (WebSocketException)
             {
-                // ignore send errors; client will be cleaned up on next broadcast or receive loop
+                throw;
             }
             catch (OperationCanceledException)
             {
-                // ignore cancellation
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[WebSocketBridge] send error: {ex}");
+                throw;
             }
         }
 

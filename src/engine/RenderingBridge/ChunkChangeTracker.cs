@@ -25,6 +25,7 @@ namespace TerraForge.Engine.RenderingBridge
                 {
                     updated.Add(chunk);
                     _knownChunks.Add(chunk.Coord);
+                    chunk.ClearDirtyFlag();
                 }
             }
 

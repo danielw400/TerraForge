@@ -13,6 +13,7 @@ export class NetworkClient {
         this._pollIntervalMs = 1000;
         this._reconnectTimeoutId = null;
         this._manualDisconnect = false;
+        this._reconnectAttempts = 0;
     }
 
     async fetchFrame(url) {
@@ -130,6 +131,7 @@ export class NetworkClient {
         this._manualDisconnect = false;
         this._pollUrl = options.pollingUrl || this._pollUrl;
         this._pollIntervalMs = options.retryIntervalMs ?? this._pollIntervalMs;
+        this._reconnectAttempts = 0;
 
         if (this._ws) {
             this.disconnectWebSocket({ stopReconnect: true });
@@ -151,6 +153,7 @@ export class NetworkClient {
                 cleanup();
                 this._emitStatus('WebSocket connected');
                 this._clearReconnect();
+                this._reconnectAttempts = 0;
                 this.stopPolling();
                 didResolve = true;
                 resolve();
@@ -262,7 +265,11 @@ export class NetworkClient {
             return;
         }
 
-        console.log('[Network] Reconnecting');
+        const baseDelayMs = Math.max(250, this._pollIntervalMs || 1000);
+        const delayMs = Math.min(30000, baseDelayMs * Math.pow(2, this._reconnectAttempts));
+        this._reconnectAttempts += 1;
+
+        console.log('[Network] Reconnecting...');
         this._emitStatus('Reconnecting');
         this._reconnectTimeoutId = setTimeout(async () => {
             this._reconnectTimeoutId = null;
@@ -272,7 +279,7 @@ export class NetworkClient {
             } catch (err) {
                 this._scheduleReconnect();
             }
-        }, this._pollIntervalMs);
+        }, delayMs);
     }
 
     _clearReconnect() {
