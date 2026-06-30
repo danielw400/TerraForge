@@ -36,19 +36,38 @@ export class NetworkClient {
     }
 
     async checkHealth(url) {
-        console.log('[Network] Checking backend health', url);
+        console.log('[Network] Checking /health...');
         try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
                 const err = `HTTP ${res.status} ${res.statusText}`;
-                console.warn('[Network] Health check failed', err);
-                return false;
+                console.warn('[Network] Health check failed', err, url);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
             }
-            console.log('[Network] Health check OK', url);
-            return true;
+
+            let payload;
+            try {
+                payload = await res.json();
+            } catch (jsonError) {
+                console.warn('[Network] Health response was not valid JSON', url);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
+            }
+
+            if (!payload || payload.status !== 'ok') {
+                console.warn('[Network] Health response did not contain status: ok', payload);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
+            }
+
+            console.log('[Network] Health OK');
+            this._emitStatus('Backend connected');
+            return { ok: true, data: payload };
         } catch (err) {
             console.warn('[Network] Health check error', err.message || err);
-            return false;
+            this._emitStatus('Backend disconnected');
+            return { ok: false, data: null };
         }
     }
 
@@ -71,13 +90,15 @@ export class NetworkClient {
             if (normalized) {
                 console.log('[Network] Backend URL detected from query parameter', normalized);
                 try {
-                    localStorage.setItem('terraforge-backend-url', normalized);
+                    if (typeof localStorage !== 'undefined') {
+                        localStorage.setItem('terraforge-backend-url', normalized);
+                    }
                 } catch {}
                 return normalized;
             }
         }
 
-        const storedUrl = localStorage.getItem('terraforge-backend-url')?.trim();
+        const storedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('terraforge-backend-url')?.trim() : null;
         if (storedUrl) {
             const normalized = NetworkClient._normalizeBackendBaseUrl(storedUrl);
             if (normalized) {
@@ -91,34 +112,26 @@ export class NetworkClient {
 
         if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
             const url = `${protocol}//${hostname}:3000`;
-            console.log('[Network] Backend URL detected for localhost', url);
+            console.log('[Network] Backend URL:', url);
             return url;
         }
 
-        if (hostname.endsWith('.app.github.dev') || hostname.endsWith('.github.dev')) {
-            const match = hostname.match(/^(.+)-\d+(\.(?:app\.)?github\.dev)$/);
-            if (match) {
-                const prefix = match[1];
-                const suffix = match[2];
-                const url = `https://${prefix}-3000${suffix}`;
-                console.log('[Network] Backend URL detected for Codespaces', url);
-                return url;
-            }
-        }
-
-        if (window.location.port) {
-            const url = `${protocol}//${hostname}:3000`;
-            console.log('[Network] Backend URL detected from current host port', url);
+        const codespacesMatch = hostname.match(/^(\d+)-(.*\.(?:app\.)?github\.dev)$/i);
+        if (codespacesMatch) {
+            const backendHostname = `3000-${codespacesMatch[2]}`;
+            const url = `${protocol}//${backendHostname}`;
+            console.log('[Network] Backend URL:', url);
             return url;
         }
 
-        const fallback = `${protocol}//${hostname}`;
-        console.log('[Network] Backend URL fallback to current origin', fallback);
-        return fallback;
+        const url = `${protocol}//${hostname}:3000`;
+        console.log('[Network] Backend URL:', url);
+        return url;
     }
 
     async connectWebSocket(url, options = {}) {
-        console.log('[Network] WebSocket URL detected', url);
+        console.log('[Network] Connecting WebSocket...');
+        this._emitStatus('WebSocket connecting');
         if (typeof WebSocket === 'undefined') {
             throw new Error('WebSocket is not available in this environment');
         }
@@ -151,6 +164,7 @@ export class NetworkClient {
 
             const onOpen = () => {
                 cleanup();
+                console.log('[Network] WebSocket Connected');
                 this._emitStatus('WebSocket connected');
                 this._clearReconnect();
                 this._reconnectAttempts = 0;
@@ -176,6 +190,7 @@ export class NetworkClient {
                 if (this._ws === socket) {
                     this._ws = null;
                 }
+                console.log('[Network] WebSocket Disconnected');
                 this._emitStatus('WebSocket disconnected');
                 if (!this._manualDisconnect) {
                     this._scheduleReconnect();
@@ -245,8 +260,8 @@ export class NetworkClient {
             return;
         }
 
-        console.log('[Network] Fallback to HTTP polling', url, 'interval', intervalMs);
-        this._emitStatus('Fallback to HTTP polling');
+        console.log('[Network] Using HTTP Polling');
+        this._emitStatus('HTTP polling active');
         this._pollIntervalId = setInterval(() => {
             this.fetchFrame(this._pollUrl).catch(() => {
                 // Silent retry on polling failure
@@ -323,9 +338,9 @@ export class NetworkClient {
 
         try {
             const backendBase = new URL(frameUrl, window.location.href);
-            const wsProtocol = backendBase.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = new URL(`${wsProtocol}//${backendBase.host}/ws`);
-            console.log('[Network] WebSocket URL generated', wsUrl.toString());
+            const wsUrl = new URL('/ws', backendBase.origin);
+            wsUrl.protocol = backendBase.protocol === 'https:' ? 'wss:' : 'ws:';
+            console.log('[Network] WebSocket URL:', wsUrl.toString());
             return wsUrl.toString();
         } catch (error) {
             console.warn('[NetworkClient] Invalid backend frame URL for WebSocket', frameUrl);
@@ -429,6 +444,6 @@ export class NetworkClient {
 // Usage example (development):
 // const client = new NetworkClient();
 // client.onFrame(frame => console.log('frame', frame));
-// client.connectWebSocket('ws://localhost:3000/ws');
-// client.fetchFrame('/frame.json');
-// client.startPolling('/frame.json', 1000);
+// client.connectWebSocket(`${window.location.origin.replace(/:\d+$/, '')}/ws`);
+// client.fetchFrame('/frame');
+// client.startPolling('/frame', 1000);

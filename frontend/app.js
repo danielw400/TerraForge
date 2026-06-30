@@ -118,42 +118,57 @@ function flushInputCommands() {
 }
 
 net.onStatus(status => {
-    if (typeof status === 'string') {
-        console.log('[App] Network status:', status);
-        if (status.includes('WebSocket connected')) {
-            setConnectionStatus('Connected', 'Active', 'Running');
-        } else if (status.includes('WebSocket reconnected')) {
-            setConnectionStatus('Connected', 'Reconnecting', 'Running');
-        } else if (status.includes('WebSocket disconnected')) {
-            setConnectionStatus('Connected', 'Disconnected', 'Running');
-        }
+    if (typeof status !== 'string') {
+        return;
     }
 
-    if (typeof status === 'string' && (status.includes('WebSocket connected') || status.includes('WebSocket reconnected'))) {
+    console.log('[App] Network status:', status);
+
+    if (status.includes('Backend connected')) {
+        setConnectionStatus('Connected', 'Disconnected', 'HTTP Polling');
+    } else if (status.includes('Backend disconnected')) {
+        setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
+    } else if (status.includes('WebSocket connected')) {
+        setConnectionStatus('Connected', 'Connected', 'Running');
+    } else if (status.includes('WebSocket reconnected')) {
+        setConnectionStatus('Connected', 'Reconnecting', 'Running');
+    } else if (status.includes('WebSocket disconnected')) {
+        setConnectionStatus('Connected', 'Disconnected', 'HTTP Polling');
+    } else if (status.includes('HTTP polling active')) {
+        setConnectionStatus('Connected', 'Disconnected', 'HTTP Polling');
+    }
+
+    if (status.includes('WebSocket connected') || status.includes('WebSocket reconnected')) {
         sendPendingInputCommands();
     }
 });
 
 async function initializeBackend() {
-    const healthOk = await net.checkHealth(backendHealthUrl);
-    if (!healthOk) {
-        console.warn('[App] Backend health check failed, will try offline snapshot');
-        console.log('[Network] Offline mode enabled.');
+    console.log('[Network] Backend URL:', backendBaseUrl);
+    console.log('[Network] Backend frame URL:', backendFrameUrl);
+    console.log('[Network] Backend health URL:', backendHealthUrl);
+
+    const health = await net.checkHealth(backendHealthUrl);
+    if (!health.ok) {
+        console.warn('[App] Backend health check failed, using offline snapshot');
+        console.log('[Network] Offline Mode Enabled');
         setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
         await loadOfflineSnapshot();
         return;
     }
 
+    console.log('[Network] Backend health verified');
+    setConnectionStatus('Connected', 'Disconnected', 'HTTP Polling');
+
     if (backendWebSocketUrl) {
         try {
             await net.connectWebSocket(backendWebSocketUrl, { pollingUrl: backendFrameUrl, retryIntervalMs: 1000 });
             backendAvailable = true;
-            console.log('[App] Connected to backend WebSocket');
-            setConnectionStatus('Connected', 'Active', 'Running');
+            console.log('[Network] WebSocket Connected');
             return;
         } catch (err) {
-            console.warn('[App] WebSocket backend unavailable, falling back to HTTP.');
-            setConnectionStatus('Connected', 'Disconnected', 'Running');
+            console.warn('[App] WebSocket unavailable, using HTTP polling');
+            console.log('[Network] Using HTTP Polling');
         }
     }
 
@@ -161,14 +176,25 @@ async function initializeBackend() {
         const frame = await net.fetchFrame(backendFrameUrl);
         backendAvailable = true;
         console.log('[App] Backend HTTP snapshot loaded successfully');
-        setConnectionStatus('Connected', 'Disconnected', 'Running');
         applyNetworkFrame(frame);
         net.startPolling(backendFrameUrl, 250);
+        setConnectionStatus('Connected', 'Disconnected', 'HTTP Polling');
     } catch (err) {
         console.warn('[App] Backend HTTP unavailable:', err);
+        console.log('[Network] Offline Mode Enabled');
         setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
         await loadOfflineSnapshot();
     }
+}
+
+function getStatusClass(label) {
+    if (label === 'Connected' || label === 'Active' || label === 'HTTP Polling' || label === 'Running') {
+        return 'status-connected';
+    }
+    if (label === 'Reconnecting') {
+        return 'status-reconnecting';
+    }
+    return 'status-disconnected';
 }
 
 function setStatus(element, text, cssClass) {
@@ -178,9 +204,9 @@ function setStatus(element, text, cssClass) {
 }
 
 function setConnectionStatus(backend, websocket, sync) {
-    setStatus(statusBackend, backend, backend === 'Connected' ? 'status-connected' : 'status-disconnected');
-    setStatus(statusWebSocket, websocket, websocket === 'Active' ? 'status-connected' : websocket === 'Reconnecting' ? 'status-reconnecting' : 'status-disconnected');
-    setStatus(statusSync, sync, sync === 'Running' ? 'status-connected' : sync === 'Stopped' ? 'status-disconnected' : 'status-reconnecting');
+    setStatus(statusBackend, backend, getStatusClass(backend));
+    setStatus(statusWebSocket, websocket, getStatusClass(websocket));
+    setStatus(statusSync, sync, getStatusClass(sync));
 }
 
 setConnectionStatus('Disconnected', 'Disconnected', 'Stopped');
