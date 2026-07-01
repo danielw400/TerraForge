@@ -19,7 +19,10 @@ export class CameraController {
         this.smoothFactor = options.smoothFactor || 0.1;
         this.targetPos = new THREE.Vector3();
         this.targetLookAt = new THREE.Vector3();
-        
+        this.playerVec = new THREE.Vector3();
+        this.backDir = new THREE.Vector3(0, 0, -1);
+        this.lookAheadDir = new THREE.Vector3(0, 0, 1);
+
         this.debug = options.debug !== false; // enable debug logs
     }
 
@@ -27,20 +30,20 @@ export class CameraController {
      * Update camera based on player and optional camera state DTO
      */
     update(playerPos, cameraState = null) {
-        if (!playerPos) return;
-
         if (cameraState && cameraState.position) {
             // Use explicit camera state (highest priority)
             this._updateFromCameraState(cameraState);
             if (this.debug) console.log('[CameraController] Using explicit CameraStateDto');
-        } else {
-            // Follow player in third-person
+            return;
+        }
+
+        if (playerPos) {
+            // Follow player in third-person when no explicit camera state exists
             this._followPlayerThirdPerson(playerPos);
         }
     }
 
     _updateFromCameraState(cameraState) {
-        // Set camera position directly from DTO
         if (cameraState.position) {
             this.targetPos.set(
                 cameraState.position.x,
@@ -52,7 +55,6 @@ export class CameraController {
             }
         }
 
-        // Set look-at target
         if (cameraState.target) {
             this.targetLookAt.set(
                 cameraState.target.x,
@@ -64,33 +66,23 @@ export class CameraController {
             }
         }
 
-        // Apply with smoothing
         this._applySmoothedTransform();
     }
 
     _followPlayerThirdPerson(playerPos) {
-        // Position camera behind and above the player
-        // Assume player is looking along some forward direction (default: +Z)
-        
-        const playerVec = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
-        
-        // Back direction (opposite of player forward, default -Z)
-        const backDir = new THREE.Vector3(0, 0, -1); // looking towards +Z, so camera goes to -Z
-        
-        // Camera position: behind and above player
-        this.targetPos.copy(playerVec);
-        this.targetPos.add(backDir.multiplyScalar(this.thirdPersonDistance));
+        this.playerVec.set(playerPos.x, playerPos.y, playerPos.z);
+
+        this.targetPos.copy(this.playerVec);
+        this.targetPos.addScaledVector(this.backDir, this.thirdPersonDistance);
         this.targetPos.y += this.thirdPersonHeight;
 
-        // Look-at point: slightly ahead of player
-        this.targetLookAt.copy(playerVec);
-        this.targetLookAt.add(new THREE.Vector3(0, 0, this.lookAheadDistance));
-        
+        this.targetLookAt.copy(this.playerVec);
+        this.targetLookAt.addScaledVector(this.lookAheadDir, this.lookAheadDistance);
+
         if (this.debug) {
             console.log(`[CameraController] Third-person follow: pos=[${this.targetPos.toArray()}], target=[${this.targetLookAt.toArray()}]`);
         }
 
-        // Apply with smoothing
         this._applySmoothedTransform();
     }
 

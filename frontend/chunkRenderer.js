@@ -10,10 +10,11 @@ export class ChunkRenderer {
         this.scene = scene;
         this.chunkSize = options.chunkSize || 16;
         this.blockScale = options.blockScale || 1.0;
-        this.chunks = new Map(); // key -> { group, metadata }
+        this.chunks = new Map(); // key -> { coord, allocations, version }
         this.materialCache = new Map();
         this.geometryCache = new Map(); // cache geometries like box
         this.pools = new Map(); // blockId -> pool object for global InstancedMesh reuse
+        this.tmpMat4 = new THREE.Matrix4();
     }
 
     // aplica um frame inteiro: adiciona/atualiza e remove chunks
@@ -42,15 +43,21 @@ export class ChunkRenderer {
 
     addOrUpdateChunk(chunkDto) {
         const key = this._coordKey(chunkDto.coord);
+        const existing = this.chunks.get(key);
+        const chunkVersion = chunkDto.version ?? 0;
+        const chunkDirty = !!chunkDto.isDirty;
 
-        // if exists, remove and recreate for simplicity (cheap for prototype)
-        if (this.chunks.has(key)) {
+        if (existing && existing.version === chunkVersion && !chunkDirty) {
+            return;
+        }
+
+        if (existing) {
             this.removeChunk(chunkDto.coord);
         }
 
-        // For pooling we will allocate instance slots from global pools per blockId.
         const blocks = chunkDto.blocks || [];
         const side = this._inferSideLength(blocks.length);
+        const halfScale = this.blockScale * 0.5;
 
         const positionsById = new Map();
         let index = 0;
@@ -59,38 +66,38 @@ export class ChunkRenderer {
                 for (let z = 0; z < side; z++) {
                     const blockId = blocks[index++] ?? 0;
                     if (!blockId) continue;
-                    if (!positionsById.has(blockId)) positionsById.set(blockId, []);
                     const worldX = chunkDto.coord.x * this.chunkSize + x;
                     const worldY = chunkDto.coord.y * this.chunkSize + y;
                     const worldZ = chunkDto.coord.z * this.chunkSize + z;
-                    positionsById.get(blockId).push(new THREE.Vector3(
-                        worldX * this.blockScale + this.blockScale / 2,
-                        worldY * this.blockScale + this.blockScale / 2,
-                        worldZ * this.blockScale + this.blockScale / 2
-                    ));
+                    const bucket = positionsById.get(blockId) || { coords: [] };
+                    bucket.coords.push(
+                        worldX * this.blockScale + halfScale,
+                        worldY * this.blockScale + halfScale,
+                        worldZ * this.blockScale + halfScale
+                    );
+                    positionsById.set(blockId, bucket);
                 }
             }
         }
 
         const chunkAllocations = [];
-        // for each block type, allocate indices from pool and write matrices
-        for (const [blockId, positions] of positionsById.entries()) {
+        for (const [blockId, bucket] of positionsById.entries()) {
+            const coords = bucket.coords;
             const pool = this._ensurePool(blockId);
-            const alloc = this._allocateSlots(pool, positions.length, key);
-            const tmpMat4 = new THREE.Matrix4();
+            const alloc = this._allocateSlots(pool, coords.length / 3, key);
             for (let i = 0; i < alloc.length; i++) {
                 const slot = alloc[i];
-                const pos = positions[i];
-                tmpMat4.makeTranslation(pos.x, pos.y, pos.z);
-                slot.mesh.setMatrixAt(slot.index, tmpMat4);
+                const px = coords[i * 3];
+                const py = coords[i * 3 + 1];
+                const pz = coords[i * 3 + 2];
+                this.tmpMat4.makeTranslation(px, py, pz);
+                slot.mesh.setMatrixAt(slot.index, this.tmpMat4);
                 slot.mesh.instanceMatrix.needsUpdate = true;
-                // record allocation for later free
                 chunkAllocations.push({ blockId, meshIndex: slot.meshIndex, index: slot.index });
             }
         }
 
-        // store chunk allocations (no per-chunk meshes added to scene)
-        this.chunks.set(key, { coord: chunkDto.coord, allocations: chunkAllocations });
+        this.chunks.set(key, { coord: chunkDto.coord, allocations: chunkAllocations, version: chunkDto.version ?? 0 });
     }
 
     // ensure a pool exists for a given blockId

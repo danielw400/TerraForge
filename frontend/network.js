@@ -9,30 +9,129 @@ export class NetworkClient {
         this._pollIntervalId = null;
         this._ws = null;
         this._wsUrl = null;
+        this._pollUrl = null;
+        this._pollIntervalMs = 1000;
+        this._reconnectTimeoutId = null;
+        this._manualDisconnect = false;
+        this._reconnectAttempts = 0;
     }
 
     async fetchFrame(url) {
-        console.log(`[NetworkClient] Fetching frame from: ${url}`);
+        console.log('[Network] HTTP GET', url);
         try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
                 const err = `HTTP ${res.status} ${res.statusText}`;
-                console.error(`[NetworkClient] Fetch failed: ${err}`);
                 throw new Error(`fetchFrame failed: ${err}`);
             }
 
             const json = await res.json();
-            console.log(`[NetworkClient] Frame loaded successfully from: ${url}`);
             const frame = NetworkClient.parseFrame(json);
             this._emitFrame(frame);
             return frame;
         } catch (err) {
-            console.error(`[NetworkClient] Fetch error: ${err.message}`);
+            console.warn('[Network] fetchFrame error', err.message || err);
             throw err;
         }
     }
 
-    async connectWebSocket(url) {
+    async checkHealth(url) {
+        console.log('[Network] Checking /health...');
+        try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) {
+                const err = `HTTP ${res.status} ${res.statusText}`;
+                console.warn('[Network] Health check failed', err, url);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
+            }
+
+            let payload;
+            try {
+                payload = await res.json();
+            } catch (jsonError) {
+                console.warn('[Network] Health response was not valid JSON', url);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
+            }
+
+            if (!payload || payload.status !== 'ok') {
+                console.warn('[Network] Health response did not contain status: ok', payload);
+                this._emitStatus('Backend disconnected');
+                return { ok: false, data: null };
+            }
+
+            console.log('[Network] Health OK');
+            this._emitStatus('Backend connected');
+            return { ok: true, data: payload };
+        } catch (err) {
+            console.warn('[Network] Health check error', err.message || err);
+            this._emitStatus('Backend disconnected');
+            return { ok: false, data: null };
+        }
+    }
+
+    static _normalizeBackendBaseUrl(rawUrl) {
+        if (!rawUrl) return null;
+        try {
+            const url = new URL(rawUrl, window.location.href);
+            return url.origin;
+        } catch (e) {
+            console.warn('[Network] Invalid backendUrl value', rawUrl);
+            return null;
+        }
+    }
+
+    static getBackendBaseUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const explicitUrl = params.get('backendUrl')?.trim();
+        if (explicitUrl) {
+            const normalized = NetworkClient._normalizeBackendBaseUrl(explicitUrl);
+            if (normalized) {
+                console.log('[Network] Backend URL detected from query parameter', normalized);
+                try {
+                    if (typeof localStorage !== 'undefined') {
+                        localStorage.setItem('terraforge-backend-url', normalized);
+                    }
+                } catch {}
+                return normalized;
+            }
+        }
+
+        const storedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('terraforge-backend-url')?.trim() : null;
+        if (storedUrl) {
+            const normalized = NetworkClient._normalizeBackendBaseUrl(storedUrl);
+            if (normalized) {
+                console.log('[Network] Backend URL detected from localStorage', normalized);
+                return normalized;
+            }
+        }
+
+        const hostname = window.location.hostname;
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
+            const url = `${protocol}//${hostname}:3000`;
+            console.log('[Network] Backend URL:', url);
+            return url;
+        }
+
+        const codespacesMatch = hostname.match(/^(\d+)-(.*\.(?:app\.)?github\.dev)$/i);
+        if (codespacesMatch) {
+            const backendHostname = `3000-${codespacesMatch[2]}`;
+            const url = `${protocol}//${backendHostname}`;
+            console.log('[Network] Backend URL:', url);
+            return url;
+        }
+
+        const url = `${protocol}//${hostname}:3000`;
+        console.log('[Network] Backend URL:', url);
+        return url;
+    }
+
+    async connectWebSocket(url, options = {}) {
+        console.log('[Network] Connecting WebSocket...');
+        this._emitStatus('WebSocket connecting');
         if (typeof WebSocket === 'undefined') {
             throw new Error('WebSocket is not available in this environment');
         }
@@ -41,22 +140,40 @@ export class NetworkClient {
             throw new Error('Invalid WebSocket URL');
         }
 
+        this._wsUrl = url;
+        this._manualDisconnect = false;
+        this._pollUrl = options.pollingUrl || this._pollUrl;
+        this._pollIntervalMs = options.retryIntervalMs ?? this._pollIntervalMs;
+        this._reconnectAttempts = 0;
+
         if (this._ws) {
-            this.disconnectWebSocket();
+            this.disconnectWebSocket({ stopReconnect: true });
         }
 
-        this._wsUrl = url;
         return new Promise((resolve, reject) => {
             const socket = new WebSocket(url);
             this._ws = socket;
+            let didResolve = false;
 
-            socket.addEventListener('open', () => {
-                this._emitStatus(`WebSocket connected: ${url}`);
-                console.log(`[NetworkClient] WebSocket connected to ${url}`);
+            const cleanup = () => {
+                socket.removeEventListener('open', onOpen);
+                socket.removeEventListener('message', onMessage);
+                socket.removeEventListener('close', onClose);
+                socket.removeEventListener('error', onError);
+            };
+
+            const onOpen = () => {
+                cleanup();
+                console.log('[Network] WebSocket Connected');
+                this._emitStatus('WebSocket connected');
+                this._clearReconnect();
+                this._reconnectAttempts = 0;
+                this.stopPolling();
+                didResolve = true;
                 resolve();
-            });
+            };
 
-            socket.addEventListener('message', event => {
+            const onMessage = event => {
                 try {
                     const json = JSON.parse(event.data);
                     const frame = NetworkClient.parseFrame(json);
@@ -66,55 +183,124 @@ export class NetworkClient {
                 } catch (error) {
                     console.error('[NetworkClient] WebSocket parse error:', error);
                 }
-            });
+            };
 
-            socket.addEventListener('close', event => {
-                this._emitStatus(`WebSocket closed (${event.code})`);
-                console.warn('[NetworkClient] WebSocket closed:', event.code, event.reason);
-                this._ws = null;
-            });
+            const onClose = event => {
+                cleanup();
+                if (this._ws === socket) {
+                    this._ws = null;
+                }
+                console.log('[Network] WebSocket Disconnected');
+                this._emitStatus('WebSocket disconnected');
+                if (!this._manualDisconnect) {
+                    this._scheduleReconnect();
+                    this.startPolling(this._pollUrl || this._wsUrl, this._pollIntervalMs);
+                }
+                if (!didResolve) {
+                    reject(new Error('WebSocket connection closed')); 
+                }
+            };
 
-            socket.addEventListener('error', error => {
+            const onError = error => {
                 this._emitStatus('WebSocket error');
-                console.error('[NetworkClient] WebSocket error', error);
-                if (socket.readyState !== WebSocket.OPEN) {
+                if (!didResolve && socket.readyState !== WebSocket.OPEN) {
+                    cleanup();
                     reject(new Error('WebSocket connection failed'));
                 }
-            });
+            };
+
+            socket.addEventListener('open', onOpen);
+            socket.addEventListener('message', onMessage);
+            socket.addEventListener('close', onClose);
+            socket.addEventListener('error', onError);
         });
     }
 
-    disconnectWebSocket() {
+    disconnectWebSocket({ stopReconnect = false } = {}) {
         if (!this._ws) return;
+        this._manualDisconnect = stopReconnect;
         try {
             this._ws.close(1000, 'Client closing');
         } catch (err) {
             console.warn('[NetworkClient] Failed to close WebSocket cleanly', err);
         }
         this._ws = null;
-        this._emitStatus('WebSocket disconnected');
+        if (stopReconnect) {
+            this._clearReconnect();
+        }
     }
 
     isWebSocketConnected() {
         return this._ws && this._ws.readyState === WebSocket.OPEN;
     }
 
+    sendInputCommands(commands = []) {
+        if (!this.isWebSocketConnected() || !Array.isArray(commands) || commands.length === 0) {
+            return false;
+        }
+
+        try {
+            this._ws.send(JSON.stringify({ type: 'input', commands }));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
     startPolling(url, intervalMs = 1000) {
-        if (this._pollIntervalId) this.stopPolling();
-        console.log(`[NetworkClient] Starting polling: ${url} every ${intervalMs}ms`);
-        this._emitStatus(`Polling HTTP backend: ${url}`);
+        if (!url) return;
+        this._pollUrl = url;
+        this._pollIntervalMs = intervalMs;
+
+        if (this.isWebSocketConnected()) {
+            return;
+        }
+
+        if (this._pollIntervalId) {
+            return;
+        }
+
+        console.log('[Network] Using HTTP Polling');
+        this._emitStatus('HTTP polling active');
         this._pollIntervalId = setInterval(() => {
-            this.fetchFrame(url).catch(err => {
-                console.warn(`[NetworkClient] Polling fetch error (retrying): ${err.message}`);
+            this.fetchFrame(this._pollUrl).catch(() => {
+                // Silent retry on polling failure
             });
-        }, intervalMs);
+        }, this._pollIntervalMs);
     }
 
     stopPolling() {
         if (!this._pollIntervalId) return;
         clearInterval(this._pollIntervalId);
         this._pollIntervalId = null;
-        this._emitStatus('Stopped HTTP polling');
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectTimeoutId || this._manualDisconnect || !this._wsUrl) {
+            return;
+        }
+
+        const baseDelayMs = Math.max(250, this._pollIntervalMs || 1000);
+        const delayMs = Math.min(30000, baseDelayMs * Math.pow(2, this._reconnectAttempts));
+        this._reconnectAttempts += 1;
+
+        console.log('[Network] Reconnecting...');
+        this._emitStatus('Reconnecting');
+        this._reconnectTimeoutId = setTimeout(async () => {
+            this._reconnectTimeoutId = null;
+            try {
+                await this.connectWebSocket(this._wsUrl);
+                this._emitStatus('WebSocket reconnected');
+            } catch (err) {
+                this._scheduleReconnect();
+            }
+        }, delayMs);
+    }
+
+    _clearReconnect() {
+        if (!this._reconnectTimeoutId) return;
+        clearTimeout(this._reconnectTimeoutId);
+        this._reconnectTimeoutId = null;
     }
 
     onFrame(callback) {
@@ -138,7 +324,6 @@ export class NetworkClient {
     }
 
     _emitStatus(message) {
-        console.log(`[NetworkClient] ${message}`);
         for (const cb of this._statusListeners) {
             try {
                 cb(message);
@@ -152,12 +337,11 @@ export class NetworkClient {
         if (!frameUrl) return null;
 
         try {
-            const url = new URL(frameUrl, window.location.href);
-            url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-            url.pathname = '/ws';
-            url.search = '';
-            url.hash = '';
-            return url.toString();
+            const backendBase = new URL(frameUrl, window.location.href);
+            const wsUrl = new URL('/ws', backendBase.origin);
+            wsUrl.protocol = backendBase.protocol === 'https:' ? 'wss:' : 'ws:';
+            console.log('[Network] WebSocket URL:', wsUrl.toString());
+            return wsUrl.toString();
         } catch (error) {
             console.warn('[NetworkClient] Invalid backend frame URL for WebSocket', frameUrl);
             return null;
@@ -171,12 +355,13 @@ export class NetworkClient {
         if (!frameSource || typeof frameSource !== 'object') return null;
 
         return {
+            serverTime: frameSource.serverTime ?? frameSource.server_time ?? null,
             chunks: Array.isArray(frameSource.chunks) ? frameSource.chunks.map(NetworkClient.parseChunk) : [],
             chunkUnloads: Array.isArray(frameSource.chunkUnloads) ? frameSource.chunkUnloads.map(c => ({ coord: c.coord })) : [],
             player: frameSource.player ? NetworkClient.parsePlayer(frameSource.player) : null,
             zombies: Array.isArray(frameSource.zombies) ? frameSource.zombies.map(NetworkClient.parseZombie) : [],
+            environmentObjects: Array.isArray(frameSource.environmentObjects) ? frameSource.environmentObjects.map(NetworkClient.parseEnvironmentObject) : [],
             camera: frameSource.camera ? NetworkClient.parseCamera(frameSource.camera) : null,
-            raw: frameSource
         };
     }
 
@@ -194,6 +379,15 @@ export class NetworkClient {
         return {
             id: dto.id ?? 'player',
             position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null,
             velocity: dto.velocity ? { x: dto.velocity.x, y: dto.velocity.y, z: dto.velocity.z } : null,
             state: dto.state ?? null,
             isGrounded: !!dto.isGrounded,
@@ -207,8 +401,35 @@ export class NetworkClient {
             type: dto.type,
             position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
             state: dto.state,
-            health: dto.health,
-            targetPosition: dto.targetPosition ? { x: dto.targetPosition.x, y: dto.targetPosition.y, z: dto.targetPosition.z } : null
+            health: typeof dto.health === 'number' ? dto.health : null,
+            targetPosition: dto.targetPosition ? { x: dto.targetPosition.x, y: dto.targetPosition.y, z: dto.targetPosition.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null
+        };
+    }
+
+    static parseEnvironmentObject(dto) {
+        return {
+            id: dto.id,
+            type: dto.type,
+            position: dto.position ? { x: dto.position.x, y: dto.position.y, z: dto.position.z } : null,
+            rotation: dto.rotation ? {
+                x: dto.rotation.x,
+                y: dto.rotation.y,
+                z: dto.rotation.z,
+                w: dto.rotation.w,
+                yaw: dto.rotation.yaw,
+                pitch: dto.rotation.pitch,
+                roll: dto.rotation.roll
+            } : null,
+            state: dto.state ?? 'Static'
         };
     }
 
@@ -223,6 +444,6 @@ export class NetworkClient {
 // Usage example (development):
 // const client = new NetworkClient();
 // client.onFrame(frame => console.log('frame', frame));
-// client.connectWebSocket('ws://localhost:3000/ws');
-// client.fetchFrame('/frame.json');
-// client.startPolling('/frame.json', 1000);
+// client.connectWebSocket(`${window.location.origin.replace(/:\d+$/, '')}/ws`);
+// client.fetchFrame('/frame');
+// client.startPolling('/frame', 1000);

@@ -59,11 +59,24 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 wss.on('connection', ws => {
-    console.log('[DevServer] WebSocket client connected');
-    ws.send(JSON.stringify(worldSim.generateFrame()));
+    console.log('[Network] Connected.');
+    const initialSnapshot = worldSim.generateInitialSnapshot();
+    ws.send(JSON.stringify(initialSnapshot));
+    console.log('[Network] InitialSnapshot sent.');
+
+    ws.on('message', (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            if (message && message.type === 'input' && Array.isArray(message.commands)) {
+                worldSim.applyInputCommands(message.commands);
+            }
+        } catch (err) {
+            console.warn('[DevServer] Failed to parse WebSocket message', err);
+        }
+    });
 
     ws.on('close', () => {
-        console.log('[DevServer] WebSocket client disconnected');
+        console.log('[Network] Connection lost.');
     });
 
     ws.on('error', error => {
@@ -77,6 +90,7 @@ const broadcastInterval = setInterval(() => {
     for (const client of wss.clients) {
         if (client.readyState === client.OPEN) {
             client.send(payload);
+            console.log('[Network] FrameUpdate sent.');
         }
     }
 }, 250);

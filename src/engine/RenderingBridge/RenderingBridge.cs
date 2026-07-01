@@ -24,10 +24,21 @@ namespace TerraForge.Engine.RenderingBridge
             return _publisher.PublishFrameState();
         }
 
+        public FrameUpdateDto CollectInitialSnapshot()
+        {
+            return _publisher.PublishInitialSnapshot();
+        }
+
         public string CollectFrameStateJson()
         {
             var frame = CollectFrameState();
             return JsonSerializer.Serialize(frame, JsonOptions);
+        }
+
+        public string CollectInitialSnapshotJson()
+        {
+            var snapshot = CollectInitialSnapshot();
+            return JsonSerializer.Serialize(snapshot, JsonOptions);
         }
     }
 }
