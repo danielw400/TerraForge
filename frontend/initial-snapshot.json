@@ -1,0 +1,57 @@
+{
+  "chunks": [
+    {
+      "coord": { "x": 0, "y": 0, "z": 0 },
+      "blocks": [
+        2,2,2,2, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+        0,0,1,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0, 3,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+      ],
+      "version": 1,
+      "isDirty": false
+    },
+    {
+      "coord": { "x": 1, "y": 0, "z": 0 },
+      "blocks": [
+        0,0,4,0, 0,4,0,0, 0,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0, 4,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+      ],
+      "version": 1,
+      "isDirty": false
+    }
+  ],
+  "chunkUnloads": [],
+  "player": {
+    "id": "player",
+    "position": { "x": 2.0, "y": 1.5, "z": 2.0 },
+    "velocity": { "x": 0.0, "y": 0.0, "z": 0.0 },
+    "state": "Idle",
+    "isGrounded": true,
+    "health": 100.0
+  },
+  "zombies": [
+    {
+      "id": "z-1",
+      "type": "InfectadoComum",
+      "position": { "x": 20.0, "y": 1.0, "z": 2.0 },
+      "state": "Wandering",
+      "health": 50.0,
+      "targetPosition": { "x": 2.0, "y": 1.5, "z": 2.0 }
+    },
+    {
+      "id": "z-2",
+      "type": "InfectadoComum",
+      "position": { "x": 18.0, "y": 1.0, "z": 4.0 },
+      "state": "Alert",
+      "health": 75.0,
+      "targetPosition": { "x": 2.0, "y": 1.5, "z": 2.0 }
+    }
+  ],
+  "camera": {
+    "position": { "x": 10.0, "y": 10.0, "z": 30.0 },
+    "target": { "x": 2.0, "y": 1.5, "z": 2.0 }
+  }
+}
